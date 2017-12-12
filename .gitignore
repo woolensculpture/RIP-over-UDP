@@ -1,0 +1,10 @@
+
+src\.zip
+
+\.idea/
+
+*.iml
+
+*.zip
+
+out/
