@@ -3,178 +3,236 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.*;
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Set;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Router implements Runnable {
 	private boolean threadSuspended = false;
 	private boolean run = true;
-	private static final Pattern redox = Pattern.compile("\\s+|:|/");
-	private final ArrayList<String> interfaces = new ArrayList<>();
-	private ArrayList<RouteRow> routingTable = new ArrayList<>();
-	private ArrayList<DatagramSocket> sockets = new ArrayList<>();
-	private ArrayList<ReceiveQueue> receivers = new ArrayList<>();
+	private final ConcurrentHashMap<String, RouteRow> routingTable = new ConcurrentHashMap<>();
+	private final ArrayList<Interface> interfaces = new ArrayList<>();
 	private static final int TABLE_MAX_SIZE = 25;
-	private static final int TIMEOUT_SIZE = 7000;
+	private static final int TIMEOUT_SIZE = 1000; // normally 30 seconds
+    private static final long GARBAGE_COLLECTOR_TIME = 3000; // normally 120 seconds
+	private static final long ROUTE_TTL = 5000; // normally 120 seconds
 	private static final PrintStream out = System.out;
 
 
-
-	void addEdge(String inter, String neighbor) {
-        addEdge(inter, neighbor, 1);
+    /**
+     * create a new interface wrapper function
+     * @param inter - the interface address and port
+     * @param neighbor - the remote address and port
+     */
+	void newInterface(String inter, String neighbor) {
+        newInterface(inter, neighbor, 1);
 	}
 
-	private void addEdge(String inter, String neighbor, int cost){
+    /**
+     * creates a new interface/connection/edge between 2 routers
+     * @param inter - the interface address and port
+     * @param neighbor - the remote interface and port it should connect to
+     * @param cost - the cost of the port
+     */
+	private void newInterface(String inter, String neighbor, int cost){
 		try {
-			String[] s = neighbor.split(":");
-			DatagramSocket sock = new DatagramSocket(Integer.parseInt(s[1]), InetAddress.getByName(s[0]));
-			sockets.add(sock);
-			receivers.add(new ReceiveQueue(sock));
+			String[] in = inter.split(":");
+            String[] nei = neighbor.split(":");
+			DatagramSocket sock = new DatagramSocket(Integer.parseInt(in[1]), InetAddress.getByName(in[0]));
+			interfaces.add(new Interface(sock, InetAddress.getByName(nei[0]), Integer.parseInt(nei[1])));
 		} catch (NumberFormatException | IOException e) {
 			e.printStackTrace();
 		}
-		interfaces.add(inter);
 	}
 
-    boolean newTableEntry(InetAddress netInterface, int netMask, InetAddress address, int ID, int cost){
-		RouteRow e = new RouteRow(netInterface,netMask, address, ID, (short) (cost + 1));
-		if(routingTable.size() < TABLE_MAX_SIZE){
-			routingTable.add(e);
-			return true;
-		}
-		return false;
-	}
-	
-	private RouteRow newTableEntry(String netInterface, String netMask, String address, String ID, String cost){
-		try {
-			return new RouteRow(InetAddress.getByName(netInterface),Integer.parseInt(netMask),
-					InetAddress.getByName(address), Integer.parseInt(ID), (short)(1 + Short.parseShort(cost)));
-		} catch (NumberFormatException | UnknownHostException ignored) { }
-		return null;
-	}
-
-	void print() {
-	    synchronized (out){
-            out.printf("\n\n%s \t\t %s \t\t %s\n", "Address","Next Hop","Cost");
-            out.println("====================================================");
-            routingTable.stream().map(RouteRow::toString).forEach(out::println);
+    /**
+     * a subnet entry creator
+     * @param network - the network address it is advertising
+     * @param netMask - the subnet mask for the network
+     * @param cost - the cost, which is always 0
+     * @return whether it succeeded in creating a router row
+     */
+    void newSubnetEntry(InetAddress network, int netMask, int cost){
+        RouteRow row;
+	    try {
+            row = new RouteRow(
+                    network, netMask,
+                    new Interface(
+                            new DatagramSocket(null),
+                            InetAddress.getByName("0.0.0.0"),
+                            0),
+                    cost + 1);
+        } catch (SocketException | UnknownHostException e) {
+            e.printStackTrace();
+            return;
         }
-	}
 
-	public void run() {
-		receivers.forEach(runner -> new Thread(runner).start());
-		while(run) {
-            if (threadSuspended) continue;
-            boolean changes = false;
-
-            // first advertise to other nodes
-            for(DatagramSocket socket: sockets) {
-                for(RouteRow row: routingTable) {
-                    String[] l = interfaces.get(sockets.indexOf(socket)).split(":");
-                    String msg = row.advertisement(l[0], socket.getLocalPort());
-                    try {
-                        socket.send(new DatagramPacket(msg.getBytes(),
-                                msg.length(), InetAddress.getByName(l[0]), Integer.parseInt(l[1])));
-                    } catch (IOException ignored) {
-                        ignored.printStackTrace();
-                    }
-                }
-            }
-            //then get incoming messages
-            Set<String> incomingMessages = new ConcurrentSkipListSet<>();
-            receivers.stream().filter(ReceiveQueue::newData).map(ReceiveQueue::getData).forEach(incomingMessages::addAll);
-
-            ArrayList<String> newMessages = new ArrayList<>();
-            Set<RouteRow> adders = new HashSet<>();
-
-            //
-            for(RouteRow row : routingTable) {
-                row.setDeleteValue(row.getDeleteValue() + 1);
-                for(String d : incomingMessages) {
-                    String[] receivedData = redox.split(d);
-                    if(row.compareTo(receivedData) || Integer.parseInt(receivedData[4]) == 15)
-                        newMessages.add(d);
-                }
-            }
-            incomingMessages.removeAll(newMessages);
-            newMessages.clear();
-
-            for(RouteRow row : routingTable){
-                String[] table = row.toArray();
-                for(String d : incomingMessages){
-                    String[] receivedData = redox.split(d);
-                    if(table[0].equals(receivedData[0]) &&
-                            table[1].equals(receivedData[1]) && table[2].equals(receivedData[2])){
-                        row.setDeleteValue(0);
-                        newMessages.add(d);
-                    }
-                }
-            }
-            incomingMessages.removeAll(newMessages);
-            newMessages.clear();
-
-            for(String d : incomingMessages){
-                Iterator<RouteRow> iterator = routingTable.iterator();
-                while(iterator.hasNext()){
-                    RouteRow next = iterator.next();
-                    String[] row = next.toArray();
-                    String[] input = redox.split(d);
-                    if(input[0].equals(row[0])){
-                        if((Integer.parseInt(input[4]) + 1) < next.getCost()) {
-                            iterator.remove();
-                            adders.add(newTableEntry(input[0], input[1], input[2], input[3], input[4]));
-                            newMessages.add(d);
-                            changes = true;
-                        }
-                        else if(input[2].equals(row[2])) next.setDeleteValue(0);
-                        else newMessages.add(d);
-                    }
-                }
-            }
-
-            incomingMessages.removeAll(newMessages);
-            newMessages.clear();
-
-            Stream.concat(
-                    adders.stream(),
-                    incomingMessages.stream().map(redox::split)
-                        .map(arr -> newTableEntry(arr[0], arr[1], arr[2], arr[3], arr[4]))
-            ).collect(Collectors.toMap(RouteRow::getHostAddress, p -> p, (p, q) -> p)).values().forEach(a -> {
-                    if(routingTable.size() < TABLE_MAX_SIZE) routingTable.add(a);
-                });
-            if(!incomingMessages.isEmpty()) changes = true;
-
-            routingTable.removeAll(routingTable.stream()
-                .filter(entry -> entry.getDeleteValue() >= 1 &&
-                        !entry.getInterfaceAddress().getHostAddress().equals("0.0.0.0"))
-                .collect(Collectors.toList())
-            );
-
-            // print table is changes made
-            if(changes) print();
-            try { Thread.sleep(TIMEOUT_SIZE); }
-            catch (InterruptedException ignored) {}
-            incomingMessages.clear();
-        }
-        receivers.forEach(ReceiveQueue::kill);
-	}
-
-	private boolean sendResponse(DatagramSocket socket, byte[] msg){
-        return true;
+        if(routingTable.size() >= TABLE_MAX_SIZE) return;
+        routingTable.put(network.toString().replace("/", "") + "/" + netMask, row);
     }
 
-	private byte[] ripResponse() {
+    /**
+     * synchronized print function for the router table
+     */
+	public void print() {
+	    synchronized (out) {
+            out.printf("\n\n%s \t\t %s \t\t %s\n", "Address", "Next Hop", "Cost");
+            out.println("====================================================");
+            routingTable.values()
+                    .stream()
+                    .sorted(Comparator.comparingInt(RouteRow::getMetric))
+                    .forEach(row -> out.println(row.toString()));
+        }
+	}
+
+    /**
+     * gets string
+     * @return the string
+     */
+	public String toString(){
+	    StringBuilder x = new StringBuilder();
+	    x.append("\n\nAddress \t\t Next Hop \t\t Cost\n");
+	    x.append("====================================================\n");
+        routingTable.forEach((i, row) -> x.append(row.toString()));
+        return x.toString();
+    }
+
+    /**
+     * main loop for router, constantly scans the interfaces for new packets
+     */
+	public void run() {
+		interfaces.forEach(runner -> new Thread(runner).start());
+		GarbageCollector gar = new GarbageCollector();
+		Broadcast br = new Broadcast();
+		new Thread(br).start();
+		new Thread(gar).start();
+
+        boolean changes = false;
+
+        //TODO broadcast request
+		while(run) {
+            if (threadSuspended) continue;
+
+            // get incoming messages
+            for(Interface inter: interfaces){
+                if(!inter.newData()) continue;
+                for (DatagramPacket mess: inter.getData()){
+                    if (mess.getData()[0] == 2) { // a response, for now don't worry about unsolicited responses
+                        changes = handleRouteResponse(mess, inter);
+                    } else if (mess.getData()[0] == 1) { // request, need to send a correctly formatted response
+                        //TODO respond to a RIP request
+                    }
+                }
+            }
+
+            // print table is changes made
+            if(changes){
+                print();
+                changes = false;
+            }
+        }
+        interfaces.forEach(Interface::kill);
+		gar.kill();
+		br.kill();
+	}
+
+    /**
+     * the method to handle a route response
+     * @param packet - response packet to take
+     * @param inter - the interface it came from
+     * @return whether changes were made to the routing table
+     */
+	private boolean handleRouteResponse(DatagramPacket packet, Interface inter) {
+	    boolean changes = false;
+	    byte[] resp = packet.getData();
+	    // Get data appears to include the udp header
+	    for(int i = 4; i < packet.getLength(); i += 20){
+	        //grab the fields
+
+            InetAddress remoteAddress;
+            InetAddress nextHop;
+            try {
+                remoteAddress = InetAddress.getByAddress(Arrays.copyOfRange(resp, i + 4, i + 8));
+                nextHop = InetAddress.getByAddress(Arrays.copyOfRange(resp, i + 12, i + 16));
+            } catch (UnknownHostException e) {
+                e.printStackTrace();
+                continue;
+            }
+            int nextHopPort = bytesToShort(resp, i + 2) & 0xFFFF; // hijacking the the route tag to make this work on UDP
+            int subnetMask = SubmaskToCIDR(bytesTo32Int(resp, i + 8));
+            int metric = bytesTo32Int(resp, i + 16);
+
+            if(interfaces.parallelStream().anyMatch(in -> in.getLocalAddress().equals(nextHop.toString()) &&
+                    in.getLocalPort() == nextHopPort)){
+                metric = 16; // infinity
+            }
+
+            String address = remoteAddress.toString().replace("/", "") + "/" + subnetMask;
+            if(metric > 15) continue;
+            if(!routingTable.containsKey(address)){
+                routingTable.put(address, new RouteRow(remoteAddress, subnetMask, inter, metric + 1));
+                broadcastResponse();
+                changes = true;
+            } else if (routingTable.get(address).getMetric() > metric + 1) { // if metric is less update
+                routingTable.put(address, new RouteRow(remoteAddress, subnetMask, inter, metric + 1));
+                broadcastResponse();
+                changes = true;
+            //Check if the current row is from the same router, if so update
+            }
+            else if (routingTable.get(address).getInter().getRemoteAddress().equals(packet.getAddress().toString()) &&
+                routingTable.get(address).getInter().getRemotePort() == packet.getPort()) {
+                if(metric + 1 != routingTable.get(address).getMetric()) changes = true;
+                routingTable.put(address, new RouteRow(remoteAddress, subnetMask, inter, metric + 1));
+            }
+
+        }
+        return changes;
+    }
+
+    /**
+     * converts byte array to int
+     * @param arr byte array to pull from
+     * @param start the start of the array
+     * @return
+     */
+    private static int bytesTo32Int(byte[] arr, int start){
+	    //assumes little endianness might need to and to get around signing
+        return (arr[start] << 24) | ((arr[start + 1] & 0xFF) << 16) | ((arr[start + 2] & 0xFF) << 8) | (arr[start + 3] & 0xFF);
+    }
+
+    /**
+     * converts by to short
+     * @param arr the array to pull from
+     * @param start start index of the array to pull from
+     * @return
+     */
+    private static short bytesToShort(byte[] arr, int start){
+        return (short)((arr[start] >> 8) | arr[start + 1]);
+    }
+
+    /**
+     * broadcasts the route table using rip to all interfaces
+     */
+	private void broadcastResponse() {
+	    interfaces.forEach(inter -> inter.send(ripResponse(inter)));
+    }
+
+    /**
+     * builds the rip response message
+     * @param inter
+     * @return
+     */
+	private byte[] ripResponse(Interface inter) {
         // first advertise to other nodes
         ByteArrayOutputStream msg = responseHeader();
-        routingTable.forEach(row -> row.advertisement(msg));
+        routingTable.forEach( (i, row) -> row.advertisement(msg, inter));
         return msg.toByteArray();
     }
 
+    /**
+     * builds the rip response header
+     * @return
+     */
     private static ByteArrayOutputStream responseHeader() {
         ByteArrayOutputStream msg = new ByteArrayOutputStream();
         msg.write(2); // command response
@@ -188,18 +246,72 @@ public class Router implements Runnable {
         return msg;
     }
 
-    private class garbageCollector implements Runnable{
+    /**
+     * the garbage collector for the router
+     */
+    private class GarbageCollector implements Runnable {
+        private boolean running = true;
         @Override
         public void run() {
 
+            //TODO: implement RIP requests
+            while (running){
+                boolean change = false;
+                for(String key : routingTable.keySet()){
+                    if (System.currentTimeMillis() - routingTable.get(key).getTimestamp() > ROUTE_TTL &&
+                            !routingTable.get(key).getInter().getLocalAddress().equals("0.0.0.0")) {
+                        routingTable.remove(key);
+                        change = true;
+                    }
+                }
+                if (change) print();
+                try {
+                    Thread.sleep(GARBAGE_COLLECTOR_TIME);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        public void kill(){
+            running = false;
         }
     }
 
-    private class broadcast implements Runnable{
+    /**
+     * thread to broadcast a rip response every so often
+     */
+    private class Broadcast implements Runnable {
+	    private boolean running = true;
         @Override
         public void run() {
-
+            while (running){
+                broadcastResponse();
+                try {
+                    Thread.sleep(TIMEOUT_SIZE);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
         }
+
+        public void kill(){
+            running = false;
+        }
+    }
+
+    /**
+     * 	this was taken from Hacker's delight section 5.1 after being pointed to it from a stack overflow post that
+     * 	recommended it as the fastest way to convert subnet mask to cidr.
+     * 	How do you properly cite in code
+     */
+    private static int SubmaskToCIDR(int x){
+        x = x - ((x >>> 1) & 0x55555555);
+        x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+        x = (x + (x >>> 4)) & 0x0F0F0F0F;
+        x = x + (x >>> 8);
+        x = x + (x >>> 16);
+        return x & 0x0000003F;
     }
 
     void suspend(){

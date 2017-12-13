@@ -4,85 +4,92 @@ import java.net.InetAddress;
 
 public class RouteRow {
 
-	private final short cost;
-	private final InetAddress interfaceAddress;
-	private final int ID;
+	private final int metric;
+	private final Interface inter;
 	private final InetAddress network;
 	private final int netMask;
-	private final String[] arr = new String[5];
-	private int forget = 0;
-	
-	RouteRow(InetAddress network, int netMask, InetAddress interfaceAddress, int ID, short cost){
+	private final long timestamp = System.currentTimeMillis();
+
+    /**
+     * contructor for router row
+     * @param network - the network to advertise
+     * @param netMask - the netmask of the network to advertise
+     * @param inter - the interface to send as the next hope
+     * @param cost - the cost of the route
+     */
+	RouteRow(InetAddress network, int netMask, Interface inter, int cost){
 		this.network = network;
 		this.netMask = netMask;
-		this.interfaceAddress = interfaceAddress;
-		this.ID = ID;
-		this.cost = cost;
-
-	}
-	
-	InetAddress getInterfaceAddress(){
-		return interfaceAddress;
-	}
-	
-	int getCost(){
-		return cost;
-	}
-	
-	int getDeleteValue(){
-		return forget;
-	}
-	
-	void setDeleteValue(int value){
-		forget = value;
+		this.inter = inter;
+		this.metric = cost;
 	}
 
+    /**
+     * gets the interface which is the route's next hop
+     * @return
+     */
+	Interface getInter(){
+		return inter;
+	}
+
+    /**
+     * the metric of the routerow
+     * @return
+     */
+	int getMetric(){
+		return metric;
+	}
+
+    /**
+     * the timestamp of the route row's creation
+     * @return
+     */
+	long getTimestamp(){
+		return timestamp;
+	}
+
+    /**
+     * creates a string representation of the routerow
+     * @return string of the route row
+     */
 	public String toString(){
-		return String.format("%s/%s \t %s:%d \t\t %d",
+		return String.format("%s/%d \t %s:%d \t\t %d",
                 network.getHostAddress(),
                 netMask,
-                interfaceAddress.getHostAddress(),
-                ID,
-                cost);
+                inter.getLocalAddress(),
+                inter.getLocalPort(),
+                metric);
 	}
 
-	String advertisement(String dest, int Port){
-		return String.format("%s/%s \t %s:%d \t %d", network.getHostAddress(), netMask, dest, Port, cost);
-	}
-
-	ByteArrayOutputStream advertisement(ByteArrayOutputStream msgHeader){
+    /**
+     * creates the RIP response entry for the row
+     * @param msgHeader - the message header of the RIP header
+     * @param inter - the interface it will be sent through, needed for poison reverse
+     * @return the byte stream with the appended entry
+     */
+	ByteArrayOutputStream advertisement(ByteArrayOutputStream msgHeader, Interface inter){
 		try {
-			msgHeader.write(new byte[]{0,1}); // family address identifier, 1 for IPv4 no other protocols supported
-			msgHeader.write(new byte[]{0,0}); // Route Tag, to be used as the Port address of t
-			msgHeader.write(network.getHostAddress().getBytes()); // internet address, 4 bytes
+			msgHeader.write(new byte[]{0,2}); // family address identifier, 2 for IPv4 no other protocols supported
+			msgHeader.write(toBytes((short)this.inter.getLocalPort())); // Route Tag, to be used as the Port address of the remote hop
+			msgHeader.write(network.getAddress()); // internet address, 4 bytes
 			msgHeader.write(toBytes(CIDRToSubmask(netMask))); // netMask, 4 bytes
-			msgHeader.write(new byte[]{0, 0, 0, 0}); // Next Hop 4 bytes not implemented
-			msgHeader.write(toBytes(cost)); // Metric 4 bytes
+			msgHeader.write(this.inter.getLocalAddressBytes()); // Next Hop 4 bytes, since we don't have enough room the port is in the Route tag field
+			if(inter == this.inter){
+			    msgHeader.write(toBytes(16));
+            } else {
+                msgHeader.write(toBytes(metric)); // Metric 4 bytes
+            }
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 		return msgHeader;
 	}
 
-	String[] toArray(){
-	    if(arr[0] != null) return arr;
-		arr[0] = network.getHostAddress();
-		arr[1] = Integer.toString(netMask);
-		arr[2] = interfaceAddress.getHostAddress();
-		arr[3] = Integer.toString(ID);
-		arr[4] = Integer.toString(cost);
-		return arr;
-	}
-
-	String getHostAddress(){
-	    return network.getHostAddress();
-    }
-	
-	boolean compareTo(String[] input){
-		String[] l = toArray();
-		return input[0].equals(l[0]) && input[1].equals(l[1]) && input[3].equals(l[3]) && input[4].equals(l[4]);
-	}
-
+    /**
+     * converts a int to byte array
+     * @param i the int to convert
+     * @return a byte array of the int
+     */
 	private byte[] toBytes(int i)
 	{
 		byte[] result = new byte[4];
@@ -94,6 +101,11 @@ public class RouteRow {
 		return result;
 	}
 
+    /**
+     * converts a short to byte array
+     * @param i the short
+     * @return a byte array of the short
+     */
 	private byte[] toBytes(short i) {
 		byte[] result = new byte[2];
 		result[0] = (byte) (i >> 8);
@@ -102,21 +114,12 @@ public class RouteRow {
 		return result;
 	}
 
+    /**
+     * converts CIDR int to subnet mask int
+     * @param cidr - integer representing the CIDR class
+     * @return int that is a subnet mask
+     */
 	private static int CIDRToSubmask(int cidr){
 		return 0xffffffff << (32 - cidr);
-	}
-
-	/**
-	 * 	this was taken from Hacker's delight section 5.1 after being pointed to it from a stack overflow post that
-	 * 	recommended it as the fastest way to convert subnet mask to cidr.
-	 * 	How do you properly cite in code
-	 */
-	private static int SubmaskToCIDR(int x){
-		x = x - ((x >>> 1) & 0x55555555);
-		x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
-		x = (x + (x >>> 4)) & 0x0F0F0F0F;
-		x = x + (x >>> 8);
-		x = x + (x >>> 16);
-		return x & 0x0000003F;
 	}
 }

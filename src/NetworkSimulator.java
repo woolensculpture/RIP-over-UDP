@@ -57,7 +57,7 @@ public class NetworkSimulator {
                         }
                     }
                     break;
-
+                case "l":
                 case "list":
                     IntStream.range(0, routers.size()).forEachOrdered(index ->{
                         System.out.println("router ID: " + index);
@@ -65,6 +65,7 @@ public class NetworkSimulator {
                     });
                     break;
 
+                case "i":
                 case "info":
                     try {
                         getByID(Integer.parseInt(l[1])).print();
@@ -74,7 +75,7 @@ public class NetworkSimulator {
                         System.err.println("Usage: 'info [router ID]'");
                     }
                     break;
-
+                case "s":
                 case "stop":
                     try{
                         getByID(Integer.parseInt(l[1])).suspend();
@@ -85,6 +86,7 @@ public class NetworkSimulator {
                     }
                     break;
 
+                case "r" :
                 case "resume":
                     try {
                         getByID(Integer.parseInt(l[1])).resume();
@@ -116,20 +118,19 @@ public class NetworkSimulator {
 	private static Router InitializeNode(Scanner config) {
 		String reader;
 		Router router = new Router();
-		int adr = 0;
 
 		while(config.hasNext()) {
 			reader = config.nextLine();
 			String[] liner = reader.split("\\s+|/");
 			switch (liner[0]){
                 case "LINK:":
-                    router.addEdge(liner[2], liner[1]);
+                    router.newInterface(liner[1], liner[2]);
                     break;
 
                 case "NETWORK:":
                     try {
-                        router.newTableEntry(InetAddress.getByName(liner[1]),
-                                Integer.parseInt(liner[2]),InetAddress.getByName("0.0.0.0"),adr,-1);
+                        router.newSubnetEntry(InetAddress.getByName(liner[1]),
+                                Integer.parseInt(liner[2]), (short) -1);
                     } catch (NumberFormatException | UnknownHostException e) {
                         System.err.println(usage);
                         System.exit(1);
