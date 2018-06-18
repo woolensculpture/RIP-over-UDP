@@ -9,12 +9,12 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 public class NetworkSimulator {
-	private static final String usage = "java -jar rip2sim.jar [-v] file";
-	private static final String CMD = "Commands: list, info [ID], kill (ID), stop [ID], resume [ID], quit, help, ?";
-	private static final ArrayList<Router> routers = new ArrayList<>();
-	private static boolean verbose;
+    private static final String usage = "java -jar rip2sim.jar [-v] file";
+    private static final String CMD = "Commands: list, info [ID], kill (ID), stop [ID], resume [ID], quit, help, ?";
+    private static final ArrayList<Router> routers = new ArrayList<>();
+    private static boolean verbose;
 
-	public static void main(String[] args) {
+    public static void main(String[] args) {
         verbose = args[0].contains("-v");
         Arrays.stream(args)
                 .map(File::new)
@@ -35,31 +35,31 @@ public class NetworkSimulator {
                 }).forEach(routers::add);
 
         routers.forEach(router -> new Thread(router).start());
-		
-		Scanner input = new Scanner(System.in);
-		boolean running = true;
 
-		routers.forEach(Router::print);
-		while(running){
-			String[] l = input.nextLine().split("\\s+");
-			switch (l[0].toLowerCase()) {
+        Scanner input = new Scanner(System.in);
+        boolean running = true;
+
+        routers.forEach(Router::print);
+        while (running) {
+            String[] l = input.nextLine().split("\\s+");
+            switch (l[0].toLowerCase()) {
                 case "quit":
                 case "kill":
                 case "3":
-                    if (l.length == 1){
+                    if (l.length == 1) {
                         routers.forEach(Router::kill);
                         running = false;
                     } else if (l.length == 2) {
                         try {
                             getByID(Integer.parseInt(l[1])).kill();
-                        } catch(NumberFormatException | NullPointerException y) {
+                        } catch (NumberFormatException | NullPointerException y) {
                             System.err.println("Usage: kill (router ID)");
                         }
                     }
                     break;
                 case "l":
                 case "list":
-                    IntStream.range(0, routers.size()).forEachOrdered(index ->{
+                    IntStream.range(0, routers.size()).forEachOrdered(index -> {
                         System.out.println("router ID: " + index);
                         routers.get(index).print();
                     });
@@ -69,30 +69,30 @@ public class NetworkSimulator {
                 case "info":
                     try {
                         getByID(Integer.parseInt(l[1])).print();
-                    } catch(NumberFormatException | NullPointerException y) {
+                    } catch (NumberFormatException | NullPointerException y) {
                         System.err.println("invalid ID");
-                    } catch(ArrayIndexOutOfBoundsException f) {
+                    } catch (ArrayIndexOutOfBoundsException f) {
                         System.err.println("Usage: 'info [router ID]'");
                     }
                     break;
                 case "s":
                 case "stop":
-                    try{
+                    try {
                         getByID(Integer.parseInt(l[1])).suspend();
-                    } catch(NumberFormatException | NullPointerException e){
+                    } catch (NumberFormatException | NullPointerException e) {
                         System.err.println("invalid ID");
-                    }catch(ArrayIndexOutOfBoundsException f){
+                    } catch (ArrayIndexOutOfBoundsException f) {
                         System.err.println("Usage: 'stop [router ID]'");
                     }
                     break;
 
-                case "r" :
+                case "r":
                 case "resume":
                     try {
                         getByID(Integer.parseInt(l[1])).resume();
-                    }catch(NumberFormatException | NullPointerException e){
+                    } catch (NumberFormatException | NullPointerException e) {
                         System.err.println("invalid ID");
-                    }catch(ArrayIndexOutOfBoundsException f){
+                    } catch (ArrayIndexOutOfBoundsException f) {
                         System.err.println("Usage: 'resume [router ID]'");
                     }
                     break;
@@ -105,24 +105,24 @@ public class NetworkSimulator {
                     System.out.println("Input invalid");
                     System.out.println(CMD);
                     break;
-			}
-		}
-		input.close();
-	}
+            }
+        }
+        input.close();
+    }
 
-    private static Router getByID(int ID){
-	    if(0 > ID || ID >= routers.size()) return null;
+    private static Router getByID(int ID) {
+        if (0 > ID || ID >= routers.size()) return null;
         return routers.get(ID);
-	}
+    }
 
-	private static Router InitializeNode(Scanner config) {
-		String reader;
-		Router router = new Router();
+    private static Router InitializeNode(Scanner config) {
+        String reader;
+        Router router = new Router();
 
-		while(config.hasNext()) {
-			reader = config.nextLine();
-			String[] liner = reader.split("\\s+|/");
-			switch (liner[0]){
+        while (config.hasNext()) {
+            reader = config.nextLine();
+            String[] liner = reader.split("\\s+|/");
+            switch (liner[0]) {
                 case "LINK:":
                     router.newInterface(liner[1], liner[2]);
                     break;
@@ -136,10 +136,10 @@ public class NetworkSimulator {
                         System.exit(1);
                     }
                     break;
-			}
-            if(verbose) System.out.println(reader);
-		}
-		config.close();
-		return router;
-	}
+            }
+            if (verbose) System.out.println(reader);
+        }
+        config.close();
+        return router;
+    }
 }
